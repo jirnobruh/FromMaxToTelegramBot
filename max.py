@@ -112,7 +112,8 @@ class MaxClient:
             ("Cache-Control", "no-cache"),
             ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36")
         ]
-        self.websocket = connect("wss://ws-api.oneme.ru/websocket", additional_headers=headers)
+        # Устанавливаем ping_interval, чтобы websockets автоматически отправлял пинги
+        self.websocket = connect("wss://ws-api.oneme.ru/websocket", additional_headers=headers, ping_interval=25, ping_timeout=10)
         self.websocket.send(self.user_agent)
         self.websocket.recv()
 
@@ -191,22 +192,6 @@ class MaxClient:
                 func(self, msg)
                 return  
 
-    def _heartbeat(self):
-        """Отправляет пинг серверу каждые 25 секунд"""
-        while self._connected and not self._t_stop:
-            try:
-                self.websocket.send(json.dumps({
-                    "ver": 11,
-                    "cmd": 0,
-                    "seq": self.seq,
-                    "opcode": 1,
-                    "payload": {"interactive": False}
-                }))
-            except Exception as e:
-                print("Heartbeat error:", e)
-            time.sleep(25)
-
-
     # region _listener()
     def _listener(self):
         """Listener with batch processing for multiple messages"""
@@ -267,28 +252,14 @@ class MaxClient:
         opcode = recv.get("opcode")
         payload = recv.get("payload")
 
-        # Если это сообщение pong (или подтверждение ping), не печатаем его
-        if opcode == 1:
-            try:
-                self.websocket.send(json.dumps({
-                    "ver": 11,
-                    "cmd": 0,
-                    "seq": self.seq,
-                    "opcode": 1,
-                    "payload": {"interactive": False}
-                }))
-            except:
-                pass
-            return # Выходим, чтобы не печатать
-            
-        elif opcode == 128:
+        if opcode == 128:
             try:
                 msg = Message(self, payload["chatId"], **payload["message"])
                 self._hlprocessor(msg)
             except Exception as e:
                 print("Ошибка обработки сообщения:", e)
-
-        print(json.dumps(recv, ensure_ascii=False, indent=4))
+        elif opcode != 1: # Не печатаем pong-сообщения
+            print(json.dumps(recv, ensure_ascii=False, indent=4))
 
 
     # region run()
@@ -309,7 +280,6 @@ class MaxClient:
         self._t = threading.Thread(target=self._listener, name="WebMaxListener")
         self._t.daemon = True  # Добавляем daemon=True для автоматического завершения
         self._t.start()
-        threading.Thread(target=self._heartbeat, name="WebMaxHeartbeat", daemon=True).start()
     
     def stop(self):
         """
