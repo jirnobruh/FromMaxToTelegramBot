@@ -228,7 +228,7 @@ class MaxClient:
                         # Больше нет сообщений в буфере
                         break
                     except ConnectionClosedError:
-                        break
+                        raise # Пробрасываем ошибку для перехвата во внешнем try
                         
             except ConnectionClosedError:
                 self._connected = False
@@ -238,18 +238,28 @@ class MaxClient:
                 except:
                     pass
                 time.sleep(3)
-                try:
-                    self.connect()
-                except Exception as ee:
-                    print("Не смог встать:", ee)
-                    time.sleep(5)
-                else:
-                    break
+                while not self._connected and not self._t_stop:
+                    try:
+                        self.connect()
+                    except Exception as ee:
+                        print("Не смог встать:", ee)
+                        time.sleep(5)
 
             except Exception as e:
                 print(e)
                 self._connected = False
+                try:
+                    if self.websocket:
+                        self.websocket.close()
+                except:
+                    pass
                 time.sleep(5)
+                while not self._connected and not self._t_stop:
+                    try:
+                        self.connect()
+                    except Exception as ee:
+                        print("Не смог встать:", ee)
+                        time.sleep(5)
                 continue
 
     def _process_message(self, recv):
@@ -257,30 +267,27 @@ class MaxClient:
         opcode = recv.get("opcode")
         payload = recv.get("payload")
 
-        match opcode:
-            case 1:
-                try:
-                    self.websocket.send(json.dumps({
-                        "ver": 11,
-                        "cmd": 0,
-                        "seq": self.seq,
-                        "opcode": 1,
-                        "payload": {"interactive": False}
-                    }))
-                except:
-                    pass
-
-            case 128:
-                try:
-                    msg = Message(self, payload["chatId"], **payload["message"])
-                    self._hlprocessor(msg)
-                except Exception as e:
-                    print("Ошибка обработки сообщения:", e)
-
-            case _:
+        # Если это сообщение pong (или подтверждение ping), не печатаем его
+        if opcode == 1:
+            try:
+                self.websocket.send(json.dumps({
+                    "ver": 11,
+                    "cmd": 0,
+                    "seq": self.seq,
+                    "opcode": 1,
+                    "payload": {"interactive": False}
+                }))
+            except:
                 pass
+            return # Выходим, чтобы не печатать
+            
+        elif opcode == 128:
+            try:
+                msg = Message(self, payload["chatId"], **payload["message"])
+                self._hlprocessor(msg)
+            except Exception as e:
+                print("Ошибка обработки сообщения:", e)
 
-        # Необязательно: можно закомментировать, если спамит в консоль
         print(json.dumps(recv, ensure_ascii=False, indent=4))
 
 
